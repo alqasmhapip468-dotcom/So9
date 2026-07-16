@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>سوق الألعاب</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@700;800;900&family=Almarai:wght@400;500;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: '#0C1512',
+          surface: '#131F1A',
+          surface2: '#182620',
+          line: '#25352D',
+          gold: '#D4A62A',
+          goldDim: '#8A7530',
+          emerald: '#2F9E68',
+          brick: '#C2452D',
+          ink: '#F2EDE3',
+          mute: '#93A39A',
+        },
+        fontFamily: {
+          display: ['Tajawal', 'sans-serif'],
+          body: ['Almarai', 'sans-serif'],
+          mono: ['"Space Mono"', 'monospace'],
+        }
+      }
+    }
+  }
+</script>
+
+<style>
+  body { font-family: 'Almarai', sans-serif; background:#0C1512; }
+  .font-display { font-family: 'Tajawal', sans-serif; }
+  .font-ledger { font-family: 'Space Mono', monospace; direction: ltr; unicode-bidi: isolate; }
+
+  /* voucher / ticket stub card */
+  .voucher {
+    position: relative;
+    background: #131F1A;
+    border: 1px solid #25352D;
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .voucher::before, .voucher::after {
+    content: "";
+    position: absolute;
+    width: 18px; height: 18px;
+    background: #0C1512;
+    border-radius: 999px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  .voucher::before { right: -9px; }
+  .voucher::after { left: -9px; }
+  .voucher-perf {
+    border-top: 1.5px dashed #2E4137;
+  }
+
+  /* stamp seal */
+  .seal {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1.5px solid #D4A62A;
+    border-radius: 999px;
+    color: #D4A62A;
+    transform: rotate(-8deg);
+    letter-spacing: 0.5px;
+  }
+
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+  .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .fade-up { animation: fadeUp 0.35s ease both; }
+</style>
+
+<!-- Firebase (compat SDK, no Storage) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+<!-- React -->
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-bg text-ink">
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useContext, createContext, useMemo } = React;
+
+/* ---------------- Firebase init ---------------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyArSHAUZaxJ660H9pr2-5V4nq8fxmRhb_c",
+  authDomain: "souq-7b80f.firebaseapp.com",
+  projectId: "souq-7b80f",
+  storageBucket: "souq-7b80f.firebasestorage.app",
+  messagingSenderId: "136094601941",
+  appId: "1:136094601941:web:a96613b17ab91823b8885c",
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+const FieldValue = firebase.firestore.FieldValue;
+
+/* ---------------- helpers ---------------- */
+function avgRating(u) {
+  if (!u || !u.ratingCount) return null;
+  return (u.ratingSum / u.ratingCount);
+}
+function Stars({ value, size = "text-sm" }) {
+  const v = value || 0;
+  return (
+    <span className={"font-ledger " + size + " text-gold"}>
+      {"★".repeat(Math.round(v))}{"☆".repeat(5 - Math.round(v))}
+    </span>
+  );
+}
+function waLink(phone, text) {
+  const clean = (phone || "").replace(/[^0-9]/g, "");
+  return "https://wa.me/" + clean + "?text=" + encodeURIComponent(text);
+}
+
+/* ---------------- Auth context ---------------- */
+const AuthCtx = createContext(null);
+function AuthProvider({ children }) {
+  const [user, setUser] = useState(undefined); // undefined = loading, null = logged out
+  const [profile, setProfile] = useState(null);
+
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged((u) => {
+      setUser(u || null);
+      if (!u) setProfile(null);
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    const unsub = db.collection("users").doc(user.uid).onSnapshot((snap) => {
+      setProfile(snap.exists ? { id: snap.id, ...snap.data() } : null);
+    });
+    return unsub;
+  }, [user]);
+
+  return (
+    <AuthCtx.Provider value={{ user, profile }}>{children}</AuthCtx.Provider>
+  );
+}
+function useAuth() { return useContext(AuthCtx); }
+
+/* ---------------- Header ---------------- */
+function Header({ page, go, games, merchants }) {
+  const { user, profile } = useAuth();
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const results = useMemo(() => {
+    if (!q.trim()) return { g: [], m: [] };
+    const s = q.trim().toLowerCase();
+    return {
+      g: games.filter(g => g.name.toLowerCase().includes(s)).slice(0, 4),
+      m: merchants.filter(m => (m.storeName || m.name || "").toLowerCase().includes(s)).slice(0, 4),
+    };
+  }, [q, games, merchants]);
+
+  return (
+    <header className="sticky top-0 z-40 bg-bg/95 backdrop-blur border-b border-line">
+      <div className="max-w-6xl mx-auto px-4 py-3 flex items-center gap-4">
+        <button onClick={() => go("home")} className="font-display font-900 text-xl text-gold shrink-0">
+          سوق<span className="text-ink">.</span>
+        </button>
+
+        <div className="relative flex-1 max-w-md">
+          <input
+            value={q}
+            onChange={e => { setQ(e.target.value); setOpen(true); }}
+            onFocus={() => setOpen(true)}
+            placeholder="ابحث عن لعبة أو تاجر..."
+            className="w-full bg-surface border border-line rounded-full px-4 py-2 text-sm outline-none focus:border-gold placeholder:text-mute"
+          />
+          {open && q.trim() && (
+            <div className="absolute mt-2 w-full bg-surface2 border border-line rounded-xl overflow-hidden shadow-xl">
+              {results.g.map(g => (
+                <button key={g.id} onClick={() => { go("game", g.id); setOpen(false); setQ(""); }}
+                  className="w-full text-start px-4 py-2 hover:bg-surface text-sm flex items-center gap-2">
+                  <span>{g.icon}</span> {g.name}
+                </button>
+              ))}
+              {results.m.map(m => (
+                <button key={m.id} onClick={() => { go("merchant", m.id); setOpen(false); setQ(""); }}
+                  className="w-full text-start px-4 py-2 hover:bg-surface text-sm flex items-center gap-2">
+                  <span>🏪</span> {m.storeName || m.name}
+                </button>
+              ))}
+              {!results.g.length && !results.m.length && (
+                <div className="px-4 py-3 text-xs text-mute">لا توجد نتائج</div>
+              )}
+            </div>
+          )}
+        </div>
+
+        <nav className="flex items-center gap-2 text-sm shrink-0">
+          {profile && profile.role === "merchant" && (
+            <button onClick={() => go("merchant-dash")} className="px-3 py-1.5 rounded-full border border-line hover:border-gold">لوحة التاجر</button>
+          )}
+          {profile && profile.role === "customer" && (
+            <button onClick={() => go("customer-dash")} className="px-3 py-1.5 rounded-full border border-line hover:border-gold">طلباتي</button>
+          )}
+          {user ? (
+            <button onClick={() => auth.signOut()} className="px-3 py-1.5 rounded-full bg-surface2 border border-line hover:border-brick text-mute">خروج</button>
+          ) : (
+            <button onClick={() => go("login")} className="px-3 py-1.5 rounded-full bg-gold text-bg font-bold">دخول</button>
+          )}
+        </nav>
+      </div>
+    </header>
+  );
+}
+
+/* ---------------- Product Card (voucher style) ---------------- */
+function ProductCard({ product, merchant, onBuy }) {
+  const rating = avgRating(merchant);
+  return (
+    <div className="voucher fade-up shrink-0 w-64">
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="text-xs text-mute mb-1">{product.serviceName}</div>
+            <div className="font-display font-800 text-base">{product.description || product.serviceName}</div>
+          </div>
+          {merchant && merchant.badge && (
+            <span className="seal text-[9px] font-ledger px-2 py-1 shrink-0">موثوق</span>
+          )}
+        </div>
+        <div className="mt-3 flex items-center gap-2 text-xs text-mute">
+          <span>🏪</span>
+          <button onClick={() => onBuy.goMerchant(merchant?.id)} className="hover:text-gold truncate">{merchant?.storeName || merchant?.name || "تاجر"}</button>
+        </div>
+        <div className="mt-1 flex items-center gap-2 text-xs">
+          {rating ? <Stars value={rating} /> : <span className="text-mute">تاجر جديد</span>}
+          {merchant?.ratingCount ? <span className="text-mute">({merchant.ratingCount})</span> : null}
+        </div>
+      </div>
+      <div className="voucher-perf px-4 py-3 flex items-center justify-between">
+        <span className="font-ledger text-lg text-gold">{product.price} <span className="text-xs text-mute">أوقية</span></span>
+        <button onClick={() => onBuy.buy(product, merchant)} className="bg-gold text-bg text-xs font-bold px-3 py-1.5 rounded-full hover:bg-ink transition">شراء الآن</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Buy Modal ---------------- */
+function BuyModal({ item, onClose }) {
+  const { user, profile } = useAuth();
+  const [qty, setQty] = useState(1);
+  const [step, setStep] = useState("confirm"); // confirm | done
+  const [order, setOrder] = useState(null);
+  const [err, setErr] = useState("");
+
+  if (!item) return null;
+  const { product, merchant } = item;
+
+  async function confirm() {
+    setErr("");
+    if (!user || profile?.role !== "customer") {
+      setErr("سجّل دخول كزبون لإتمام الشراء.");
+      return;
+    }
+    try {
+      const ref = await db.collection("orders").add({
+        customerId: user.uid,
+        customerName: profile.name || "",
+        merchantId: merchant.id,
+        productId: product.id,
+        serviceName: product.serviceName,
+        description: product.description || "",
+        price: product.price,
+        quantity: qty,
+        status: "pending",
+        ratedByCustomer: false,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      db.collection("products").doc(product.id).update({ ordersCount: FieldValue.increment(1) }).catch(()=>{});
+      setOrder({ id: ref.id });
+      setStep("done");
+    } catch (e) {
+      setErr("حدث خطأ: " + e.message);
+    }
+  }
+
+  const msg = "مرحبًا، أريد تنفيذ طلبي:\n" + product.serviceName + (product.description ? " - " + product.description : "") +
+    "\nالكمية: " + qty + "\nالسعر: " + (product.price * qty) + " أوقية\nرقم الطلب: " + (order?.id || "");
+
+  return (
+    <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+      <div className="bg-surface border border-line rounded-2xl w-full max-w-sm p-5">
+        {step === "confirm" ? (
+          <React.Fragment>
+            <div className="font-display font-800 text-lg mb-1">{product.serviceName}</div>
+            <div className="text-sm text-mute mb-4">{merchant?.storeName || merchant?.name}</div>
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-sm">الكمية</span>
+              <div className="flex items-center gap-3">
+                <button onClick={() => setQty(q => Math.max(1, q - 1))} className="w-8 h-8 rounded-full bg-surface2 border border-line">-</button>
+                <span className="font-ledger">{qty}</span>
+                <button onClick={() => setQty(q => q + 1)} className="w-8 h-8 rounded-full bg-surface2 border border-line">+</button>
+              </div>
+            </div>
+            <div className="flex items-center justify-between mb-4 font-ledger text-gold text-lg">
+              <span className="text-sm font-body text-ink">الإجمالي</span>
+              {product.price * qty} أوقية
+            </div>
+            {err && <div className="text-brick text-xs mb-3">{err}</div>}
+            <div className="flex gap-2">
+              <button onClick={onClose} className="flex-1 py-2 rounded-full border border-line text-sm">إلغاء</button>
+              <button onClick={confirm} className="flex-1 py-2 rounded-full bg-gold text-bg font-bold text-sm">تأكيد الطلب</button>
+            </div>
+          </React.Fragment>
+        ) : (
+          <React.Fragment>
+            <div className="text-emerald text-sm mb-2">✓ تم إنشاء طلبك</div>
+            <div className="font-display font-800 text-lg mb-4">تواصل مع التاجر لإتمام التنفيذ</div>
+            <a href={waLink(merchant?.whatsapp, msg)} target="_blank" rel="noopener"
+              className="block text-center py-3 rounded-full bg-emerald text-bg font-bold text-sm mb-2">
+              التواصل عبر واتساب 📲
+            </a>
+            <button onClick={onClose} className="w-full py-2 rounded-full border border-line text-sm">إغلاق</button>
+          </React.Fragment>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Shelf (horizontal section) ---------------- */
+function Shelf({ title, icon, children, empty }) {
+  return (
+    <section className="max-w-6xl mx-auto px-4 py-8">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="text-xl">{icon}</span>
+        <h2 className="font-display font-800 text-lg">{title}</h2>
+        <div className="flex-1 border-t border-dashed border-line ms-2"></div>
+      </div>
+      {React.Children.count(children) ? (
+        <div className="flex gap-4 overflow-x-auto scrollbar-none pb-2">{children}</div>
+      ) : (
+        <div className="text-mute text-sm">{empty}</div>
+      )}
+    </section>
+  );
+}
+
+/* ---------------- Home ---------------- */
+function Home({ go, games, merchants, products, seedIfEmpty }) {
+  const topMerchants = useMemo(() => {
+    return [...merchants]
+      .map(m => ({ ...m, _avg: avgRating(m) || 0 }))
+      .sort((a, b) => b._avg - a._avg || (b.ratingCount||0) - (a.ratingCount||0))
+      .slice(0, 6);
+  }, [merchants]);
+
+  const latest = useMemo(() =>
+    [...products].filter(p => p.active !== false)
+      .sort((a, b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0)).slice(0, 6),
+  [products]);
+
+  const bestSellers = useMemo(() =>
+    [...products].filter(p => p.active !== false)
+      .sort((a, b) => (b.ordersCount||0) - (a.ordersCount||0)).slice(0, 6),
+  [products]);
+
+  const merchantOf = (id) => merchants.find(m => m.id === id);
+
+  return (
+    <div>
+      <div className="max-w-6xl mx-auto px-4 pt-10 pb-6 text-center">
+        <div className="text-xs tracking-widest text-gold font-ledger mb-3">souq · موريتانيا</div>
+        <h1 className="font-display font-900 text-3xl md:text-4xl mb-3">اشترِ شحن ألعابك واشتراكاتك<br/>من تجار موثوقين</h1>
+        <p className="text-mute text-sm max-w-md mx-auto">جواهر، عضويات، أكواد واشتراكات — بأفضل الأسعار وتقييمات حقيقية.</p>
+      </div>
+
+      {games.length === 0 && (
+        <div className="max-w-6xl mx-auto px-4 pb-4">
+          <button onClick={seedIfEmpty} className="text-xs px-4 py-2 rounded-full border border-gold text-gold">
+            ⚙ تهيئة بيانات تجريبية (Free Fire) — تظهر مرة واحدة فقط
+          </button>
+        </div>
+      )}
+
+      <Shelf title="أفضل التجار" icon="⭐" empty="لا يوجد تجار مسجّلين بعد.">
+        {topMerchants.map(m => (
+          <button key={m.id} onClick={() => go("merchant", m.id)}
+            className="voucher shrink-0 w-48 text-start p-4 fade-up">
+            <div className="w-10 h-10 rounded-full bg-surface2 flex items-center justify-center text-lg mb-2">🏪</div>
+            <div className="font-display font-800 text-sm truncate">{m.storeName || m.name}</div>
+            <div className="mt-1"><Stars value={m._avg} /></div>
+            <div className="text-[11px] text-mute mt-1">{m.ratingCount || 0} تقييم</div>
+          </button>
+        ))}
+      </Shelf>
+
+      <Shelf title="الألعاب" icon="🎮" empty="لا توجد ألعاب بعد.">
+        {games.map(g => (
+          <button key={g.id} onClick={() => go("game", g.id)}
+            className="voucher shrink-0 w-40 text-center p-5 fade-up">
+            <div className="text-3xl mb-2">{g.icon}</div>
+            <div className="font-display font-800 text-sm">{g.name}</div>
+          </button>
+        ))}
+      </Shelf>
+
+      <Shelf title="التطبيقات" icon="📱" empty="قريبًا: Netflix، Spotify، YouTube Premium وغيرها.">
+      </Shelf>
+
+      <Shelf title="آخر العروض" icon="🔥" empty="لا توجد منتجات بعد.">
+        {latest.map(p => (
+          <ProductCard key={p.id} product={p} merchant={merchantOf(p.merchantId)}
+            onBuy={{ buy: (product, merchant) => go("buy", { product, merchant }), goMerchant: (id) => go("merchant", id) }} />
+        ))}
+      </Shelf>
+
+      <Shelf title="الأكثر مبيعًا" icon="📈" empty="لا توجد بيانات مبيعات بعد.">
+        {bestSellers.map(p => (
+          <ProductCard key={p.id} product={p} merchant={merchantOf(p.merchantId)}
+            onBuy={{ buy: (product, merchant) => go("buy", { product, merchant }), goMerchant: (id) => go("merchant", id) }} />
+        ))}
+      </Shelf>
+    </div>
+  );
+}
+
+/* ---------------- Game Page ---------------- */
+function GamePage({ gameId, games, services, products, merchants, go }) {
+  const game = games.find(g => g.id === gameId);
+  const gameServices = services.filter(s => s.gameId === gameId);
+  const merchantOf = (id) => merchants.find(m => m.id === id);
+
+  if (!game) return <div className="max-w-6xl mx-auto px-4 py-16 text-center text-mute">اللعبة غير موجودة.</div>;
+
+  return (
+    <div className="max-w-6xl mx-auto px-4 py-8">
+      <div className="flex items-center gap-3 mb-8">
+        <span className="text-4xl">{game.icon}</span>
+        <div>
+          <h1 className="font-display font-900 text-2xl">{game.name}</h1>
+          <p className="text-mute text-sm">اختر الخدمة ثم قارن بين عروض التجار</p>
+        </div>
+      </div>
+
+      {gameServices.length === 0 && <div className="text-mute text-sm">لا توجد خدمات مضافة لهذه اللعبة بعد.</div>}
+
+      {gameServices.map(s => {
+        const list = products.filter(p => p.serviceId === s.id && p.active !== false && p.gameId === gameId);
+        return (
+          <div key={s.id} className="mb-10">
+            <div className="flex items-center gap-2 mb-4">
+              <h2 className="font-display font-800 text-base text-gold">{s.name}</h2>
+              <div className="flex-1 border-t border-dashed border-line ms-2"></div>
+            </div>
+            {list.length === 0 ? (
+              <div className="text-mute text-xs">لا يوجد تجار يقدمون هذه الخدمة حاليًا.</div>
+            ) : (
+              <div className="flex gap-4 overflow-x-auto scrollbar-none pb-2">
+                {list.map(p => (
+                  <ProductCard key={p.id} product={p} merchant={merchantOf(p.merchantId)}
+                    onBuy={{ buy: (product, merchant) => go("buy", { product, merchant }), goMerchant: (id) => go("merchant", id) }} />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------------- Merchant Public Page ---------------- */
+function MerchantPage({ merchantId, merchants, products, services, go }) {
+  const m = merchants.find(x => x.id === merchantId);
+  if (!m) return <div className="max-w-6xl mx-auto px-4 py-16 text-center text-mute">التاجر غير موجود.</div>;
+  const rating = avgRating(m);
+  const mProducts = products.filter(p => p.merchantId === m.id && p.active !== false);
+  const serviceName = (id) => services.find(s => s.id === id)?.name || "";
+
+  return (
+    <div className="max-w-6xl mx-auto px-4 py-10">
+      <div className="voucher p-6 mb-8 flex items-center gap-4">
+        <div className="w-16 h-16 rounded-full bg-surface2 flex items-center justify-center text-2xl">🏪</div>
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <h1 className="font-display font-900 text-xl">{m.storeName || m.name}</h1>
+            {m.badge && <span className="seal text-[9px] font-ledger px-2 py-1">موثوق</span>}
+          </div>
+          <div className="flex items-center gap-2 mt-1">
+            {rating ? <Stars value={rating} /> : <span className="text-mute text-xs">تاجر جديد</span>}
+            <span className="text-xs text-mute">({m.ratingCount || 0} تقييم · {m.completedOrders || 0} طلب منجز)</span>
+          </div>
+        </div>
+        {m.whatsapp && (
+          <a href={waLink(m.whatsapp, "مرحبًا، شاهدت متجرك في سوق وأريد الاستفسار.")} target="_blank" rel="noopener"
+            className="px-4 py-2 rounded-full bg-emerald text-bg text-sm font-bold shrink-0">واتساب 📲</a>
+        )}
+      </div>
+
+      <h2 className="font-display font-800 mb-4">المنتجات المتوفرة</h2>
+      {mProducts.length === 0 ? (
+        <div className="text-mute text-sm">لا توجد منتجات معروضة حاليًا.</div>
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+          {mProducts.map(p => (
+            <ProductCard key={p.id} product={p} merchant={m}
+              onBuy={{ buy: (product, merchant) => go("buy", { product, merchant }), goMerchant: () => {} }} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Auth Pages ---------------- */
+function LoginPage({ go }) {
+  const [mode, setMode] = useState("login"); // login | signup
+  const [role, setRole] = useState("customer");
+  const [form, setForm] = useState({ name: "", email: "", password: "", phone: "", storeName: "", whatsapp: "" });
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function set(k, v) { setForm(f => ({ ...f, [k]: v })); }
+
+  async function submit(e) {
+    e.preventDefault();
+    setErr(""); setBusy(true);
+    try {
+      if (mode === "login") {
+        await auth.signInWithEmailAndPassword(form.email, form.password);
+      } else {
+        const cred = await auth.createUserWithEmailAndPassword(form.email, form.password);
+        const base = {
+          name: form.name,
+          email: form.email,
+          phone: form.phone,
+          role,
+          createdAt: FieldValue.serverTimestamp(),
+          ratingSum: 0,
+          ratingCount: 0,
+          badge: false,
+          status: "approved",
+        };
+        if (role === "merchant") {
+          base.storeName = form.storeName || form.name;
+          base.whatsapp = form.whatsapp;
+          base.completedOrders = 0;
+        }
+        await db.collection("users").doc(cred.user.uid).set(base);
+      }
+      go("home");
+    } catch (e2) {
+      setErr(translateErr(e2.message));
+    } finally { setBusy(false); }
+  }
+
+  function translateErr(m) {
+    if (m.includes("email-already-in-use")) return "هذا البريد مستخدم بالفعل.";
+    if (m.includes("weak-password")) return "كلمة المرور ضعيفة (6 أحرف على الأقل).";
+    if (m.includes("invalid-email")) return "البريد الإلكتروني غير صالح.";
+    if (m.includes("wrong-password") || m.includes("invalid-credential")) return "بيانات الدخول غير صحيحة.";
+    if (m.includes("user-not-found")) return "لا يوجد حساب بهذا البريد.";
+    return m;
+  }
+
+  return (
+    <div className="max-w-sm mx-auto px-4 py-12">
+      <div className="voucher p-6">
+        <div className="flex mb-6 rounded-full bg-surface2 p-1 text-sm">
+          <button onClick={() => setMode("login")} className={"flex-1 py-2 rounded-full " + (mode === "login" ? "bg-gold text-bg font-bold" : "text-mute")}>دخول</button>
+          <button onClick={() => setMode("signup")} className={"flex-1 py-2 rounded-full " + (mode === "signup" ? "bg-gold text-bg font-bold" : "text-mute")}>حساب جديد</button>
+        </div>
+
+        {mode === "signup" && (
+          <div className="flex mb-4 gap-2 text-xs">
+            <button type="button" onClick={() => setRole("customer")} className={"flex-1 py-2 rounded-full border " + (role === "customer" ? "border-gold text-gold" : "border-line text-mute")}>زبون</button>
+            <button type="button" onClick={() => setRole("merchant")} className={"flex-1 py-2 rounded-full border " + (role === "merchant" ? "border-gold text-gold" : "border-line text-mute")}>تاجر</button>
+          </div>
+        )}
+
+        <form onSubmit={submit} className="space-y-3">
+          {mode === "signup" && (
+            <input required placeholder="الاسم الكامل" value={form.name} onChange={e => set("name", e.target.value)}
+              className="w-full bg-surface2 border border-line rounded-lg px-3 py-2 text-sm outline-none focus:border-gold" />
+          )}
+          {mode === "signup" && role === "merchant" && (
+            <input placeholder="اسم المتجر (اختياري)" value={form.storeName} onChange={e => set("storeName", e.target.value)}
+              className="w-full bg-surface2 border border-line rounded-lg px-3 py-2 text-sm outline-none focus:border-gold" />
+          )}
+          <input required type="email" placeholder="البريد الإلكتروني" value={form.email} onChange={e => set("email", e.target.value)}
+            className="w-full bg-surface2 border border-line rounded-lg px-3 py-2 text-sm outline-none focus:border-gold" />
+          <input required type="password" placeholder="كلمة المرور" value={form.password} onChange={e => set("password", e.target.value)}
+            className="w-full bg-surface2 border border-line rounded-lg px-3 py-2 text-sm outline-none focus:border-gold" />
+          {mode === "signup" && (
+            <input placeholder="رقم الهاتف" value={form.phone} onChange={e => set("phone", e.target.value)}
+              className="w-full bg-surface2 border border-line rounded-lg px-3 py-2 text-sm outline-none focus:border-gold" />
+          )}
+          {mode === "signup" && role === "merchant" && (
+            <div>
+              <input required placeholder="رقم واتساب مع مفتاح الدولة، مثال: 22241234567" value={form.whatsapp} onChange={e => set("whatsapp", e.target.value)}
+                className="w-full bg-surface2 border border-line rounded-lg px-3 py-2 text-sm outline-none focus:border-gold" />
+              <p className="text-[11px] text-mute mt-1">هذا الرقم سيظهر للزبائن للتواصل مباشرة بعد الطلب.</p>
+            </div>
+          )}
+          {err && <div className="text-brick text-xs">{err}</div>}
+          <button disabled={busy} className="w-full py-2.5 rounded-full bg-gold text-bg font-bold text-sm disabled:opacity-50">
+            {busy ? "جارٍ..." : (mode === "login" ? "دخول" : "إنشاء الحساب")}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Merchant Dashboard ---------------- */
+function MerchantDashboard({ services, products, go }) {
+  const { user, profile } = useAuth();
+  const [tab, setTab] = useState("products");
+  const [form, setForm] = useState({ serviceId: "", price: "", description: "" });
+  const [orders, setOrders] = useState([]);
+  const [err, setErr] = useState("");
+
+  const myProducts = products.filter(p => p.merchantId === user?.uid);
+
+  useEffect(() => {
+    if (!user) return;
+    const unsub = db.collection("orders").where("merchantId", "==", user.uid).onSnapshot(snap => {
+      const list = [];
+      snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+      list.sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+      setOrders(list);
+    });
+    return unsub;
+  }, [user]);
+
+  if (!profile || profile.role !== "merchant") {
+    return <div className="max-w-6xl mx-auto px-4 py-16 text-center text-mute">هذه الصفحة للتجار فقط. <button onClick={()=>go("login")} className="text-gold underline">سجّل دخول</button></div>;
+  }
+
+  async function addProduct(e) {
+    e.preventDefault();
+    setErr("");
+    if (!form.serviceId || !form.price) { setErr("اختر الخدمة وأدخل السعر."); return; }
+    const svc = services.find(s => s.id === form.serviceId);
+    try {
+      await db.collection("products").add({
+        merchantId: user.uid,
+        gameId: svc.gameId,
+        serviceId: svc.id,
+        serviceName: svc.name,
+        price: Number(form.price),
+        description: form.description,
+        active: true,
+        ordersCount: 0,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+      setForm({ serviceId: "", price: "", description: "" });
+    } catch (e2) { setErr(e2.message); }
+  }
+
+  async function toggleActive(p) {
+    await db.collection("products").doc(p.id).update({ active: !(p.active !== false) });
+  }
+  async function removeProduct(p) {
+    if (!confirm("حذف هذا المنتج؟")) return;
+    await db.collection("products").doc(p.id).delete();
+  }
+  async function markDone(o) {
+    await db.collection("orders").doc(o.id).update({ status: "done" });
+    await db.collection("users").doc(user.uid).update({ completedOrders: FieldValue.increment(1) });
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-8">
+      <h1 className="font-display font-900 text-2xl mb-6">لوحة التاجر</h1>
+      <div className="flex gap-2 mb-6 text-sm">
+        <button onClick={() => setTab("products")} className={"px-4 py-2 rounded-full border " + (tab==="products"?"border-gold text-gold":"border-line text-mute")}>منتجاتي</button>
+        <button onClick={() => setTab("add")} className={"px-4 py-2 rounded-full border " + (tab==="add"?"border-gold text-gold":"border-line text-mute")}>إضافة منتج</button>
+        <button onClick={() => setTab("orders")} className={"px-4 py-2 rounded-full border " + (tab==="orders"?"border-gold text-gold":"border-line text-mute")}>الطلبات الواردة ({orders.filter(o=>o.status==='pending').length})</button>
+      </div>
+
+      {tab === "add" && (
+        <form onSubmit={addProduct} className="voucher p-5 max-w-md space-y-3">
+          <select required value={form.serviceId} onChange={e => setForm(f=>({...f, serviceId: e.target.value}))}
+            className="w-full bg-surface2 border border-line rounded-lg px-3 py-2 text-sm">
+            <option value="">اختر الخدمة</option>
+            {services.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <input required type="number" min="1" placeholder="السعر (أوقية)" value={form.price} onChange={e => setForm(f=>({...f, price: e.target.value}))}
+            className="w-full bg-surface2 border border-line rounded-lg px-3 py-2 text-sm" />
+          <input placeholder="وصف مختصر (اختياري)" value={form.description} onChange={e => setForm(f=>({...f, description: e.target.value}))}
+            className="w-full bg-surface2 border border-line rounded-lg px-3 py-2 text-sm" />
+          {err && <div className="text-brick text-xs">{err}</div>}
+          <button className="w-full py-2.5 rounded-full bg-gold text-bg font-bold text-sm">نشر المنتج</button>
+        </form>
+      )}
+
+      {tab === "products" && (
+        <div className="grid sm:grid-cols-2 gap-4">
+          {myProducts.length === 0 && <div className="text-mute text-sm">لم تُضف أي منتج بعد.</div>}
+          {myProducts.map(p => (
+            <div key={p.id} className="voucher p-4">
+              <div className="flex justify-between items-start">
+                <div>
+                  <div className="text-xs text-mute">{p.serviceName}</div>
+                  <div className="font-display font-800">{p.description || p.serviceName}</div>
+                  <div className="font-ledger text-gold mt-1">{p.price} أوقية</div>
+                </div>
+                <span className={"text-[10px] px-2 py-1 rounded-full border " + (p.active !== false ? "border-emerald text-emerald" : "border-mute text-mute")}>
+                  {p.active !== false ? "نشط" : "متوقف"}
+                </span>
+              </div>
+              <div className="flex gap-2 mt-3 text-xs">
+                <button onClick={() => toggleActive(p)} className="flex-1 py-1.5 rounded-full border border-line">
+                  {p.active !== false ? "إيقاف" : "تفعيل"}
+                </button>
+                <button onClick={() => removeProduct(p)} className="flex-1 py-1.5 rounded-full border border-brick text-brick">حذف</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === "orders" && (
+        <div className="space-y-3">
+          {orders.length === 0 && <div className="text-mute text-sm">لا توجد طلبات بعد.</div>}
+          {orders.map(o => (
+            <div key={o.id} className="voucher p-4 flex justify-between items-center">
+              <div>
+                <div className="font-display font-800 text-sm">{o.serviceName} × {o.quantity}</div>
+                <div className="text-xs text-mute">{o.customerName} · {o.price * o.quantity} أوقية</div>
+              </div>
+              {o.status === "pending" ? (
+                <button onClick={() => markDone(o)} className="text-xs px-3 py-1.5 rounded-full bg-emerald text-bg font-bold">تم التنفيذ ✓</button>
+              ) : (
+                <span className="text-xs text-emerald">منجز</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------------- Customer Dashboard ---------------- */
+function CustomerDashboard({ go }) {
+  const { user, profile } = useAuth();
+  const [orders, setOrders] = useState([]);
+  const [rating, setRating] = useState({});
+
+  useEffect(() => {
+    if (!user) return;
+    const unsub = db.collection("orders").where("customerId", "==", user.uid).onSnapshot(snap => {
+      const list = [];
+      snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+      list.sort((a,b) => (b.createdAt?.seconds||0) - (a.createdAt?.seconds||0));
+      setOrders(list);
+    });
+    return unsub;
+  }, [user]);
+
+  if (!profile || profile.role !== "customer") {
+    return <div className="max-w-6xl mx-auto px-4 py-16 text-center text-mute">هذه الصفحة للزبائن فقط. <button onClick={()=>go("login")} className="text-gold underline">سجّل دخول</button></div>;
+  }
+
+  async function submitRating(o) {
+    const r = rating[o.id];
+    if (!r || !r.stars) return;
+    await db.collection("reviews").add({
+      orderId: o.id, merchantId: o.merchantId, customerId: user.uid,
+      rating: r.stars, comment: r.comment || "", createdAt: FieldValue.serverTimestamp(),
+    });
+    await db.collection("orders").doc(o.id).update({ ratedByCustomer: true });
+    await db.collection("users").doc(o.merchantId).update({
+      ratingSum: FieldValue.increment(r.stars), ratingCount: FieldValue.increment(1),
+    });
+  }
+
+  return (
+    <div className="max-w-3xl mx-auto px-4 py-8">
+      <h1 className="font-display font-900 text-2xl mb-6">طلباتي</h1>
+      <div className="space-y-4">
+        {orders.length === 0 && <div className="text-mute text-sm">لا توجد طلبات سابقة.</div>}
+        {orders.map(o => (
+          <div key={o.id} className="voucher p-4">
+            <div className="flex justify-between items-start">
+              <div>
+                <div className="font-display font-800">{o.serviceName} × {o.quantity}</div>
+                <div className="font-ledger text-gold text-sm mt-1">{o.price * o.quantity} أوقية</div>
+              </div>
+              <span className={"text-[10px] px-2 py-1 rounded-full border " + (o.status==="done" ? "border-emerald text-emerald" : "border-gold text-gold")}>
+                {o.status === "done" ? "منجز" : "قيد التنفيذ"}
+              </span>
+            </div>
+            {o.status === "done" && !o.ratedByCustomer && (
+              <div className="mt-3 pt-3 border-t border-dashed border-line">
+                <div className="text-xs text-mute mb-2">قيّم تجربتك مع هذا التاجر</div>
+                <div className="flex gap-1 mb-2">
+                  {[1,2,3,4,5].map(n => (
+                    <button key={n} onClick={() => setRating(r => ({...r, [o.id]: {...r[o.id], stars: n}}))}
+                      className={"text-lg " + ((rating[o.id]?.stars||0) >= n ? "text-gold" : "text-line")}>★</button>
+                  ))}
+                </div>
+                <input placeholder="تعليق (اختياري)" onChange={e => setRating(r => ({...r, [o.id]: {...r[o.id], comment: e.target.value}}))}
+                  className="w-full bg-surface2 border border-line rounded-lg px-3 py-2 text-xs mb-2" />
+                <button onClick={() => submitRating(o)} className="text-xs px-4 py-1.5 rounded-full bg-gold text-bg font-bold">إرسال التقييم</button>
+              </div>
+            )}
+            {o.ratedByCustomer && <div className="mt-2 text-xs text-emerald">✓ تم تقييم هذا الطلب</div>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- Root App ---------------- */
+function AppInner() {
+  const [page, setPage] = useState("home");
+  const [params, setParams] = useState(null);
+  const [buyItem, setBuyItem] = useState(null);
+  const [games, setGames] = useState([]);
+  const [services, setServices] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [merchants, setMerchants] = useState([]);
+
+  function go(p, param) {
+    if (p === "buy") { setBuyItem(param); return; }
+    setPage(p); setParams(param || null); window.scrollTo(0,0);
+  }
+
+  useEffect(() => {
+    const u1 = db.collection("games").onSnapshot(snap => {
+      const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setGames(list);
+    });
+    const u2 = db.collection("services").onSnapshot(snap => {
+      const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setServices(list);
+    });
+    const u3 = db.collection("products").onSnapshot(snap => {
+      const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setProducts(list);
+    });
+    const u4 = db.collection("users").where("role", "==", "merchant").onSnapshot(snap => {
+      const list = []; snap.forEach(d => list.push({ id: d.id, ...d.data() })); setMerchants(list);
+    });
+    return () => { u1(); u2(); u3(); u4(); };
+  }, []);
+
+  async function seedIfEmpty() {
+    const snap = await db.collection("games").limit(1).get();
+    if (!snap.empty) return;
+    await db.collection("games").doc("freefire").set({ name: "Free Fire", icon: "🔥", slug: "freefire" });
+    const svcNames = ["جواهر", "عضوية أسبوعية", "عضوية شهرية", "أكواد", "رقصات"];
+    for (const n of svcNames) {
+      await db.collection("services").add({ gameId: "freefire", name: n });
+    }
+  }
+
+  let content;
+  if (page === "home") content = <Home go={go} games={games} merchants={merchants} products={products} seedIfEmpty={seedIfEmpty} />;
+  else if (page === "game") content = <GamePage gameId={params} games={games} services={services} products={products} merchants={merchants} go={go} />;
+  else if (page === "merchant") content = <MerchantPage merchantId={params} merchants={merchants} products={products} services={services} go={go} />;
+  else if (page === "login") content = <LoginPage go={go} />;
+  else if (page === "merchant-dash") content = <MerchantDashboard services={services} products={products} go={go} />;
+  else if (page === "customer-dash") content = <CustomerDashboard go={go} />;
+  else content = <Home go={go} games={games} merchants={merchants} products={products} seedIfEmpty={seedIfEmpty} />;
+
+  return (
+    <div>
+      <Header page={page} go={go} games={games} merchants={merchants} />
+      {content}
+      {buyItem && <BuyModal item={buyItem} onClose={() => setBuyItem(null)} />}
+      <footer className="max-w-6xl mx-auto px-4 py-10 text-center text-xs text-mute border-t border-line mt-10">
+        سوق — منصة تجارية للألعاب والتطبيقات · المرحلة الأولى (تجريبية)
+      </footer>
+    </div>
+  );
+}
+
+function App() {
+  return (
+    <AuthProvider>
+      <AppRouter />
+    </AuthProvider>
+  );
+}
+// wrap to allow BuyModal to open as an overlay from any page while keeping url-less state
+function AppRouter() {
+  return <AppWithBuy />;
+}
+function AppWithBuy() {
+  return <AppInner />;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
